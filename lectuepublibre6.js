@@ -1,199 +1,341 @@
-// ==========================================
-// LectuepubLibre6 Source for Cinder Reader
-// Language: Spanish (es)
-// Format: EPUB/PDF
-// ==========================================
+// LectuepubLibre6 — Source de téléchargement pour Cinder
+// Site: https://lectuepublibre6.com
+// Langue: Espagnol (es)
+// Format: EPUB, PDF
 
-const Source = {
-    // Source metadata
-    id: 'lectuepublibre6',
-    name: 'Lectuepub Libre',
-    language: 'es',
-    version: '1.0.0',
-    baseUrl: 'https://lectuepublibre6.com',
-    
-    // Icon (optional)
-    icon: 'https://lectuepublibre6.com/favicon.ico',
-    
-    // ==========================================
-    // SEARCH FUNCTION
-    // ==========================================
-    async search(query, page = 1) {
-        const searchUrl = `${this.baseUrl}/page/${page}/?s=${encodeURIComponent(query)}&post_type=post`;
-        
-        try {
-            const response = await fetch(searchUrl);
-            const html = await response.text();
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            
-            const results = [];
-            const articles = doc.querySelectorAll('article.post, .post-item, .book-item, .entry');
-            
-            articles.forEach(article => {
-                const titleElement = article.querySelector('h2 a, .entry-title a, h3 a');
-                const coverElement = article.querySelector('img');
-                const linkElement = article.querySelector('a');
-                
-                if (titleElement && linkElement) {
-                    results.push({
-                        id: this.extractId(linkElement.href),
-                        title: titleElement.textContent.trim(),
-                        cover: coverElement ? coverElement.src : '',
-                        url: linkElement.href,
-                        author: this.extractAuthor(article)
-                    });
-                }
-            });
-            
-            return {
-                results: results,
-                hasNextPage: this.hasNextPage(doc)
-            };
-        } catch (error) {
-            console.error('Search error:', error);
-            return { results: [], hasNextPage: false };
-        }
-    },
-    
-    // ==========================================
-    // GET BOOK DETAILS
-    // ==========================================
-    async getBookDetails(bookId) {
-        const bookUrl = `${this.baseUrl}/libro/${bookId}`;
-        
-        try {
-            const response = await fetch(bookUrl);
-            const html = await response.text();
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            
-            // Extract metadata
-            const title = doc.querySelector('h1.entry-title, h1.post-title, .book-title')?.textContent?.trim() || '';
-            const author = doc.querySelector('.author, .book-author, [rel="author"]')?.textContent?.trim() || 'Desconocido';
-            const description = doc.querySelector('.entry-content p, .book-description, .summary')?.textContent?.trim() || '';
-            const cover = doc.querySelector('.book-cover img, .entry-content img')?.src || '';
-            
-            // Extract download links
-            const downloads = [];
-            const downloadLinks = doc.querySelectorAll('a[href*=".epub"], a[href*=".pdf"], .download-link, a[href*="download"]');
-            
-            downloadLinks.forEach(link => {
-                const format = link.href.includes('.pdf') ? 'pdf' : 'epub';
-                downloads.push({
-                    url: link.href,
-                    format: format,
-                    quality: 'standard'
-                });
-            });
-            
-            // Alternative: look for buttons or specific download sections
-            const buttons = doc.querySelectorAll('.btn, .button, [class*="download"]');
-            buttons.forEach(btn => {
-                const href = btn.getAttribute('href') || btn.closest('a')?.href;
-                if (href && (href.includes('.epub') || href.includes('.pdf'))) {
-                    const format = href.includes('.pdf') ? 'pdf' : 'epub';
-                    if (!downloads.find(d => d.url === href)) {
-                        downloads.push({
-                            url: href,
-                            format: format,
-                            quality: 'standard'
-                        });
-                    }
-                }
-            });
-            
-            return {
-                id: bookId,
-                title: title,
-                author: author,
-                description: description,
-                cover: cover,
-                language: 'es',
-                downloads: downloads
-            };
-        } catch (error) {
-            console.error('Book details error:', error);
-            return null;
-        }
-    },
-    
-    // ==========================================
-    // GET POPULAR/LATEST BOOKS
-    // ==========================================
-    async getPopularBooks(page = 1) {
-        const popularUrl = `${this.baseUrl}/page/${page}/`;
-        
-        try {
-            const response = await fetch(popularUrl);
-            const html = await response.text();
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            
-            const results = [];
-            const articles = doc.querySelectorAll('article.post, .post-item, .book-item');
-            
-            articles.forEach(article => {
-                const titleElement = article.querySelector('h2 a, .entry-title a, h3 a');
-                const coverElement = article.querySelector('img');
-                
-                if (titleElement) {
-                    results.push({
-                        id: this.extractId(titleElement.href),
-                        title: titleElement.textContent.trim(),
-                        cover: coverElement ? coverElement.src : '',
-                        url: titleElement.href
-                    });
-                }
-            });
-            
-            return {
-                results: results,
-                hasNextPage: this.hasNextPage(doc)
-            };
-        } catch (error) {
-            console.error('Popular books error:', error);
-            return { results: [], hasNextPage: false };
-        }
-    },
-    
-    // ==========================================
-    // HELPER FUNCTIONS
-    // ==========================================
-    extractId(url) {
-        // Extract book ID from URL
-        // Example: https://lectuepublibre6.com/libro/nombre-del-libro/
-        const match = url.match(/\/libro\/([^\/]+)\/?/);
-        return match ? match[1] : url;
-    },
-    
-    extractAuthor(article) {
-        // Try to find author in the article
-        const authorElement = article.querySelector('.author, .book-author, [rel="author"]');
-        return authorElement ? authorElement.textContent.trim() : 'Desconocido';
-    },
-    
-    hasNextPage(doc) {
-        // Check if there's a next page
-        const nextLink = doc.querySelector('.next, .pagination .next, a[rel="next"]');
-        return !!nextLink;
-    },
-    
-    // ==========================================
-    // DOWNLOAD HANDLER
-    // ==========================================
-    async getDownloadUrl(bookId, format = 'epub') {
-        const details = await this.getBookDetails(bookId);
-        if (!details || !details.downloads) return null;
-        
-        // Return the requested format, or first available
-        const download = details.downloads.find(d => d.format === format) || details.downloads[0];
-        return download ? download.url : null;
-    }
+var LectuepubLibre6 = {};
+
+LectuepubLibre6.id = "lectuepublibre6";
+LectuepubLibre6.name = "Lectuepub Libre";
+LectuepubLibre6.version = "1.0.0";
+LectuepubLibre6.icon = "book-outline";
+LectuepubLibre6.description = "Descargar libros EPUB y PDF gratis en español desde LectuepubLibre.";
+
+LectuepubLibre6.contentType = "books";
+LectuepubLibre6.contentTypes = ["ebook"];
+
+LectuepubLibre6.capabilities = {
+  search: true,
+  discover: true,
+  download: false,  // On utilise resolve() pour obtenir le lien
+  resolve: true,
+  searchDownloads: true,
+  bookChapters: false,
+  manga: false,
 };
 
-// Export for Cinder
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = Source;
-}
-__cinderExport = lectuepublibre6;
+LectuepubLibre6.UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+// URL de base du site
+LectuepubLibre6.baseUrl = "https://lectuepublibre6.com";
+
+// ─── Utilitaires ─────────────────────────────────────────────────────────────
+
+/**
+ * Parse le HTML et retourne un document
+ */
+LectuepubLibre6._parseHTML = function(html) {
+  // Créer un parser simple pour le HTML
+  var div = { innerHTML: html };
+  return div;
+};
+
+/**
+ * Extrait le texte entre deux balises HTML
+ */
+LectuepubLibre6._extractText = function(html, startTag, endTag) {
+  var start = html.indexOf(startTag);
+  if (start === -1) return "";
+  start += startTag.length;
+  var end = html.indexOf(endTag, start);
+  if (end === -1) return "";
+  var text = html.substring(start, end);
+  // Nettoyer les entités HTML basiques
+  return text
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/<[^>]+>/g, "")  // Supprimer les tags restants
+    .trim();
+};
+
+/**
+ * Extrait tous les liens correspondant à un pattern
+ */
+LectuepubLibre6._extractLinks = function(html, pattern) {
+  var links = [];
+  var regex = new RegExp(pattern, "gi");
+  var match;
+  while ((match = regex.exec(html)) !== null) {
+    links.push(match[1]);
+  }
+  return links;
+};
+
+/**
+ * Nettoie et décode une URL
+ */
+LectuepubLibre6._cleanUrl = function(url) {
+  if (!url) return "";
+  url = url.replace(/&amp;/g, "&");
+  if (url.startsWith("//")) return "https:" + url;
+  if (url.startsWith("/")) return this.baseUrl + url;
+  if (!url.startsWith("http")) return this.baseUrl + "/" + url;
+  return url;
+};
+
+// ─── Recherche ─────────────────────────────────────────────────────────────
+
+LectuepubLibre6.search = async function(query, page) {
+  var q = String(query || "").trim();
+  if (!q) return [];
+
+  var p = page && page > 1 ? page : 1;
+  var searchUrl = this.baseUrl + "/page/" + p + "/?s=" + encodeURIComponent(q) + "&post_type=post";
+
+  cinder.log("[lectuepub] recherche: " + q + " (page " + p + ")");
+
+  try {
+    var r = await cinder.fetch(searchUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": this.UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      timeout: 30000,
+    });
+
+    if (!r || !r.data) {
+      throw new Error("Pas de réponse du site");
+    }
+
+    var html = String(r.data);
+    var results = [];
+
+    // Pattern pour trouver les articles de livres
+    // Les sites WordPress ont souvent des articles avec class "post" ou "entry"
+    var articlePattern = /<article[^>]*class=["'][^"']*(?:post|entry)[^"']*["'][^>]*>([\s\S]*?)<\/article>/gi;
+    var articles = [];
+    var match;
+    
+    while ((match = articlePattern.exec(html)) !== null) {
+      articles.push(match[1]);
+    }
+
+    // Si pas d'articles trouvés avec ce pattern, essayer un autre
+    if (articles.length === 0) {
+      // Pattern plus général pour les conteneurs de livres
+      var divPattern = /<div[^>]*class=["'][^"']*(?:book|item|result)[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
+      while ((match = divPattern.exec(html)) !== null) {
+        articles.push(match[1]);
+      }
+    }
+
+    for (var i = 0; i < articles.length; i++) {
+      var article = articles[i];
+      
+      // Extraire le titre et le lien
+      var titleMatch = article.match(/<h[23][^>]*>[\s\S]*?<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h[23]>/i) ||
+                       article.match(/<a[^>]+href=["']([^"']+)["'][^>]*title=["']([^"']+)["']/i) ||
+                       article.match(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+      
+      if (!titleMatch) continue;
+      
+      var bookUrl = this._cleanUrl(titleMatch[1]);
+      var title = this._extractText(titleMatch[2] || titleMatch[0], ">", "<") || "Sans titre";
+      
+      // Extraire l'image de couverture
+      var coverMatch = article.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i) ||
+                       article.match(/<img[^>]+data-src=["']([^"']+)["'][^>]*>/i);
+      var cover = coverMatch ? this._cleanUrl(coverMatch[1]) : undefined;
+      
+      // Extraire l'auteur si disponible
+      var authorMatch = article.match(/class=["'][^"']*author[^"']*["'][^>]*>([^<]+)/i) ||
+                        article.match(/<a[^>]+rel=["']tag["'][^>]*>([^<]+)/i);
+      var author = authorMatch ? authorMatch[1].trim() : undefined;
+
+      // Extraire l'ID du livre depuis l'URL
+      var idMatch = bookUrl.match(/\/([^\/]+)\/?$/);
+      var bookId = idMatch ? idMatch[1] : bookUrl;
+
+      results.push({
+        id: "lectuepub:" + bookId,
+        title: title,
+        author: author,
+        cover: cover,
+        source: this.name,
+        extra: { bookUrl: bookUrl, bookId: bookId },
+      });
+    }
+
+    cinder.log("[lectuepub] " + results.length + " résultat(s) trouvé(s)");
+    return results;
+
+  } catch (e) {
+    cinder.error("[lectuepub] erreur recherche: " + e.message);
+    throw new Error("Impossible de rechercher sur Lectuepub: " + e.message);
+  }
+};
+
+// ─── Découverte (Populaires/Récents) ─────────────────────────────────────────
+
+LectuepubLibre6.getDiscoverSections = async function() {
+  return [
+    { id: "recents", title: "Novedades", icon: "time" },
+    { id: "populares", title: "Populares", icon: "flame" },
+  ];
+};
+
+LectuepubLibre6.getDiscoverItems = async function(sectionId, page) {
+  var p = page && page > 1 ? page : 1;
+  var url = this.baseUrl + "/page/" + p + "/";
+
+  try {
+    var r = await cinder.fetch(url, {
+      method: "GET",
+      headers: {
+        "User-Agent": this.UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      timeout: 30000,
+    });
+
+    if (!r || !r.data) return [];
+
+    var html = String(r.data);
+    var results = [];
+
+    // Même logique que search
+    var articlePattern = /<article[^>]*class=["'][^"']*(?:post|entry)[^"']*["'][^>]*>([\s\S]*?)<\/article>/gi;
+    var articles = [];
+    var match;
+    
+    while ((match = articlePattern.exec(html)) !== null) {
+      articles.push(match[1]);
+    }
+
+    for (var i = 0; i < articles.length; i++) {
+      var article = articles[i];
+      
+      var titleMatch = article.match(/<h[23][^>]*>[\s\S]*?<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h[23]>/i) ||
+                       article.match(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+      
+      if (!titleMatch) continue;
+      
+      var bookUrl = this._cleanUrl(titleMatch[1]);
+      var title = this._extractText(titleMatch[2] || titleMatch[0], ">", "<") || "Sans titre";
+      
+      var coverMatch = article.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i);
+      var cover = coverMatch ? this._cleanUrl(coverMatch[1]) : undefined;
+      
+      var authorMatch = article.match(/class=["'][^"']*author[^"']*["'][^>]*>([^<]+)/i);
+      var author = authorMatch ? authorMatch[1].trim() : undefined;
+
+      var idMatch = bookUrl.match(/\/([^\/]+)\/?$/);
+      var bookId = idMatch ? idMatch[1] : bookUrl;
+
+      results.push({
+        id: "lectuepub:" + bookId,
+        title: title,
+        author: author,
+        cover: cover,
+        source: this.name,
+        extra: { bookUrl: bookUrl, bookId: bookId },
+      });
+    }
+
+    return results;
+
+  } catch (e) {
+    cinder.error("[lectuepub] erreur découverte: " + e.message);
+    return [];
+  }
+};
+
+// ─── Résolution du lien de téléchargement ────────────────────────────────────
+
+LectuepubLibre6.resolve = async function(item) {
+  var e = (item && item.extra) || {};
+  if (!e.bookUrl) throw new Error("URL du livre manquante");
+
+  cinder.log("[lectuepub] résolution: " + e.bookUrl);
+
+  try {
+    var r = await cinder.fetch(e.bookUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": this.UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      timeout: 30000,
+    });
+
+    if (!r || !r.data) {
+      throw new Error("Impossible de charger la page du livre");
+    }
+
+    var html = String(r.data);
+
+    // Chercher les liens de téléchargement EPUB
+    var downloadUrl = null;
+    var fileFormat = "epub";
+
+    // Pattern pour les liens directs .epub ou .pdf
+    var epubMatch = html.match(/href=["']([^"']+\.epub[^"']*)["']/i) ||
+                    html.match(/href=["']([^"']+)["'][^>]*>[^<]*EPUB/i);
+    var pdfMatch = html.match(/href=["']([^"']+\.pdf[^"']*)["']/i) ||
+                   html.match(/href=["']([^"']+)["'][^>]*>[^<]*PDF/i);
+
+    if (epubMatch) {
+      downloadUrl = this._cleanUrl(epubMatch[1]);
+      fileFormat = "epub";
+    } else if (pdfMatch) {
+      downloadUrl = this._cleanUrl(pdfMatch[1]);
+      fileFormat = "pdf";
+    }
+
+    // Si pas trouvé, chercher des boutons de téléchargement
+    if (!downloadUrl) {
+      var btnMatch = html.match(/<a[^>]+class=["'][^"']*(?:download|btn|button)[^"']*["'][^>]+href=["']([^"']+)["']/i) ||
+                     html.match(/<a[^>]+href=["']([^"']+)["'][^>]*class=["'][^"']*(?:download|btn|button)/i);
+      if (btnMatch) {
+        downloadUrl = this._cleanUrl(btnMatch[1]);
+      }
+    }
+
+    // Chercher dans des iframes ou embeds
+    if (!downloadUrl) {
+      var iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+      if (iframeMatch) {
+        downloadUrl = this._cleanUrl(iframeMatch[1]);
+      }
+    }
+
+    if (!downloadUrl) {
+      throw new Error("Lien de téléchargement non trouvé sur la page");
+    }
+
+    // Déterminer le format depuis l'URL
+    if (downloadUrl.toLowerCase().includes(".pdf")) fileFormat = "pdf";
+    else if (downloadUrl.toLowerCase().includes(".epub")) fileFormat = "epub";
+
+    var nom = String(item.title || "libro").replace(/[\\/:*?"<>|]+/g, " ").trim();
+
+    cinder.log("[lectuepub] lien trouvé: " + downloadUrl + " (" + fileFormat + ")");
+
+    return {
+      url: downloadUrl,
+      fileName: nom + "." + fileFormat,
+      // Pas d'en-têtes spéciaux nécessaires pour ce site
+    };
+
+  } catch (e) {
+    cinder.error("[lectuepub] erreur résolution: " + e.message);
+    throw new Error("Impossible d'obtenir le lien: " + e.message);
+  }
+};
+
+__cinderExport = LectuepubLibre6;
