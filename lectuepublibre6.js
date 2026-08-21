@@ -1,15 +1,13 @@
 // LectuepubLibre6 — Source de téléchargement pour Cinder
-// Site: https://lectuepublibre6.com
-// Langue: Espagnol (es)
-// Format: EPUB, PDF
+// Version DEBUG avec logs détaillés
 
 var LectuepubLibre6 = {};
 
-LectuepubLibre6.id = "lectuepublibre6";
+LectuepubLibre6.id = "lectuepub6";
 LectuepubLibre6.name = "Lectuepub Libre";
-LectuepubLibre6.version = "1.0.0";
+LectuepubLibre6.version = "1.0.1";
 LectuepubLibre6.icon = "book-outline";
-LectuepubLibre6.description = "Descargar libros EPUB y PDF gratis en español desde LectuepubLibre.";
+LectuepubLibre6.description = "Descargar libros EPUB y PDF gratis en español.";
 
 LectuepubLibre6.contentType = "books";
 LectuepubLibre6.contentTypes = ["ebook"];
@@ -17,7 +15,7 @@ LectuepubLibre6.contentTypes = ["ebook"];
 LectuepubLibre6.capabilities = {
   search: true,
   discover: true,
-  download: false,  // On utilise resolve() pour obtenir le lien
+  download: false,
   resolve: true,
   searchDownloads: true,
   bookChapters: false,
@@ -25,32 +23,12 @@ LectuepubLibre6.capabilities = {
 };
 
 LectuepubLibre6.UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-// URL de base du site
 LectuepubLibre6.baseUrl = "https://lectuepublibre6.com";
 
 // ─── Utilitaires ─────────────────────────────────────────────────────────────
 
-/**
- * Parse le HTML et retourne un document
- */
-LectuepubLibre6._parseHTML = function(html) {
-  // Créer un parser simple pour le HTML
-  var div = { innerHTML: html };
-  return div;
-};
-
-/**
- * Extrait le texte entre deux balises HTML
- */
-LectuepubLibre6._extractText = function(html, startTag, endTag) {
-  var start = html.indexOf(startTag);
-  if (start === -1) return "";
-  start += startTag.length;
-  var end = html.indexOf(endTag, start);
-  if (end === -1) return "";
-  var text = html.substring(start, end);
-  // Nettoyer les entités HTML basiques
+LectuepubLibre6._cleanText = function(text) {
+  if (!text) return "";
   return text
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
@@ -58,26 +36,11 @@ LectuepubLibre6._extractText = function(html, startTag, endTag) {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/<[^>]+>/g, "")  // Supprimer les tags restants
+    .replace(/&#(\d+);/g, function(match, dec) { return String.fromCharCode(dec); })
+    .replace(/<[^>]+>/g, "")
     .trim();
 };
 
-/**
- * Extrait tous les liens correspondant à un pattern
- */
-LectuepubLibre6._extractLinks = function(html, pattern) {
-  var links = [];
-  var regex = new RegExp(pattern, "gi");
-  var match;
-  while ((match = regex.exec(html)) !== null) {
-    links.push(match[1]);
-  }
-  return links;
-};
-
-/**
- * Nettoie et décode une URL
- */
 LectuepubLibre6._cleanUrl = function(url) {
   if (!url) return "";
   url = url.replace(/&amp;/g, "&");
@@ -91,78 +54,130 @@ LectuepubLibre6._cleanUrl = function(url) {
 
 LectuepubLibre6.search = async function(query, page) {
   var q = String(query || "").trim();
-  if (!q) return [];
+  if (!q) {
+    cinder.log("[lectuepub] recherche vide");
+    return [];
+  }
 
   var p = page && page > 1 ? page : 1;
   var searchUrl = this.baseUrl + "/page/" + p + "/?s=" + encodeURIComponent(q) + "&post_type=post";
 
-  cinder.log("[lectuepub] recherche: " + q + " (page " + p + ")");
+  cinder.log("[lectuepub] ==========================================");
+  cinder.log("[lectuepub] RECHERCHE: '" + q + "' page " + p);
+  cinder.log("[lectuepub] URL: " + searchUrl);
 
   try {
     var r = await cinder.fetch(searchUrl, {
       method: "GET",
       headers: {
         "User-Agent": this.UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
       },
       timeout: 30000,
     });
 
-    if (!r || !r.data) {
-      throw new Error("Pas de réponse du site");
+    if (!r) {
+      cinder.error("[lectuepub] Pas de réponse HTTP");
+      throw new Error("Pas de réponse du serveur");
+    }
+
+    cinder.log("[lectuepub] Status: " + (r.status || "unknown"));
+    
+    if (!r.data) {
+      cinder.error("[lectuepub] Pas de données dans la réponse");
+      throw new Error("Réponse vide");
     }
 
     var html = String(r.data);
+    cinder.log("[lectuepub] HTML reçu: " + html.length + " caractères");
+    cinder.log("[lectuepub] Début HTML: " + html.substring(0, 200).replace(/\n/g, " "));
+
     var results = [];
 
-    // Pattern pour trouver les articles de livres
-    // Les sites WordPress ont souvent des articles avec class "post" ou "entry"
-    var articlePattern = /<article[^>]*class=["'][^"']*(?:post|entry)[^"']*["'][^>]*>([\s\S]*?)<\/article>/gi;
+    // Pattern 1: Articles WordPress standard
+    var articleRegex = /<article[^>]*>([\s\S]*?)<\/article>/gi;
     var articles = [];
     var match;
-    
-    while ((match = articlePattern.exec(html)) !== null) {
+    while ((match = articleRegex.exec(html)) !== null) {
       articles.push(match[1]);
     }
+    cinder.log("[lectuepub] Articles trouvés (pattern 1): " + articles.length);
 
-    // Si pas d'articles trouvés avec ce pattern, essayer un autre
+    // Pattern 2: Divs avec classes spécifiques
     if (articles.length === 0) {
-      // Pattern plus général pour les conteneurs de livres
-      var divPattern = /<div[^>]*class=["'][^"']*(?:book|item|result)[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
-      while ((match = divPattern.exec(html)) !== null) {
-        articles.push(match[1]);
+      var divRegex = /<div[^>]*class=["'][^"']*(?:post|entry|book|item|result|card)[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
+      while ((match = divRegex.exec(html)) !== null) {
+        articles.push(match[0]); // On garde toute la div
       }
+      cinder.log("[lectuepub] Divs trouvés (pattern 2): " + articles.length);
     }
 
-    for (var i = 0; i < articles.length; i++) {
+    // Pattern 3: Liens vers des livres
+    if (articles.length === 0) {
+      var linkRegex = /<a[^>]+href=["']([^"']*(?:libro|book)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+      while ((match = linkRegex.exec(html)) !== null) {
+        articles.push(match[0]);
+      }
+      cinder.log("[lectuepub] Liens trouvés (pattern 3): " + articles.length);
+    }
+
+    // Pattern 4: Tous les liens avec images (dernier recours)
+    if (articles.length === 0) {
+      var imgLinkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>[\s\S]*?<img[^>]+src=["']([^"']+)["'][^>]*>[\s\S]*?<\/a>/gi;
+      var links = [];
+      while ((match = imgLinkRegex.exec(html)) !== null) {
+        if (match[1].includes(this.baseUrl) && !match[1].includes("/page/")) {
+          articles.push(match[0]);
+        }
+      }
+      cinder.log("[lectuepub] Liens avec images (pattern 4): " + articles.length);
+    }
+
+    // Analyser chaque article trouvé
+    for (var i = 0; i < articles.length && i < 20; i++) { // Limite à 20 pour éviter les boucles infinies
       var article = articles[i];
       
-      // Extraire le titre et le lien
-      var titleMatch = article.match(/<h[23][^>]*>[\s\S]*?<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h[23]>/i) ||
-                       article.match(/<a[^>]+href=["']([^"']+)["'][^>]*title=["']([^"']+)["']/i) ||
-                       article.match(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
-      
+      // Chercher le titre et le lien
+      var titleMatch = article.match(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
       if (!titleMatch) continue;
       
       var bookUrl = this._cleanUrl(titleMatch[1]);
-      var title = this._extractText(titleMatch[2] || titleMatch[0], ">", "<") || "Sans titre";
+      var rawTitle = titleMatch[2];
       
-      // Extraire l'image de couverture
-      var coverMatch = article.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i) ||
-                       article.match(/<img[^>]+data-src=["']([^"']+)["'][^>]*>/i);
-      var cover = coverMatch ? this._cleanUrl(coverMatch[1]) : undefined;
+      // Nettoyer le titre (enlever les tags HTML)
+      var title = this._cleanText(rawTitle);
+      if (!title || title.length < 2) continue;
       
-      // Extraire l'auteur si disponible
-      var authorMatch = article.match(/class=["'][^"']*author[^"']*["'][^>]*>([^<]+)/i) ||
-                        article.match(/<a[^>]+rel=["']tag["'][^>]*>([^<]+)/i);
-      var author = authorMatch ? authorMatch[1].trim() : undefined;
+      // Filtrer les liens qui ne sont pas des livres
+      if (bookUrl.includes("/page/") || bookUrl.includes("/category/") || bookUrl.includes("/tag/")) {
+        continue;
+      }
+      
+      // Chercher l'image
+      var imgMatch = article.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i) ||
+                     article.match(/<img[^>]+data-src=["']([^"']+)["'][^>]*>/i) ||
+                     article.match(/<img[^>]+srcset=["']([^"'\s]+)/i);
+      var cover = imgMatch ? this._cleanUrl(imgMatch[1]) : undefined;
+      
+      // Chercher l'auteur
+      var authorMatch = article.match(/<a[^>]+rel=["']tag["'][^>]*>([^<]+)<\/a>/i) ||
+                        article.match(/class=["'][^"']*author[^"']*["'][^>]*>([^<]+)/i) ||
+                        article.match(/<span[^>]*class=["'][^"']*author[^"']*["'][^>]*>([^<]+)/i);
+      var author = authorMatch ? this._cleanText(authorMatch[1]) : undefined;
 
-      // Extraire l'ID du livre depuis l'URL
+      // Extraire l'ID
       var idMatch = bookUrl.match(/\/([^\/]+)\/?$/);
-      var bookId = idMatch ? idMatch[1] : bookUrl;
+      var bookId = idMatch ? idMatch[1] : String(i);
+
+      cinder.log("[lectuepub] Livre trouvé: '" + title + "' -> " + bookUrl);
 
       results.push({
-        id: "lectuepub:" + bookId,
+        id: "lp6:" + bookId,
         title: title,
         author: author,
         cover: cover,
@@ -171,20 +186,22 @@ LectuepubLibre6.search = async function(query, page) {
       });
     }
 
-    cinder.log("[lectuepub] " + results.length + " résultat(s) trouvé(s)");
+    cinder.log("[lectuepub] Total résultats: " + results.length);
+    cinder.log("[lectuepub] ==========================================");
+
     return results;
 
   } catch (e) {
-    cinder.error("[lectuepub] erreur recherche: " + e.message);
-    throw new Error("Impossible de rechercher sur Lectuepub: " + e.message);
+    cinder.error("[lectuepub] ERREUR recherche: " + e.message);
+    throw new Error("Erreur de recherche: " + e.message);
   }
 };
 
-// ─── Découverte (Populaires/Récents) ─────────────────────────────────────────
+// ─── Découverte ─────────────────────────────────────────────────────────────
 
 LectuepubLibre6.getDiscoverSections = async function() {
   return [
-    { id: "recents", title: "Novedades", icon: "time" },
+    { id: "novedades", title: "Novedades", icon: "time" },
     { id: "populares", title: "Populares", icon: "flame" },
   ];
 };
@@ -192,6 +209,8 @@ LectuepubLibre6.getDiscoverSections = async function() {
 LectuepubLibre6.getDiscoverItems = async function(sectionId, page) {
   var p = page && page > 1 ? page : 1;
   var url = this.baseUrl + "/page/" + p + "/";
+
+  cinder.log("[lectuepub] Découverte section: " + sectionId + " page " + p);
 
   try {
     var r = await cinder.fetch(url, {
@@ -209,59 +228,59 @@ LectuepubLibre6.getDiscoverItems = async function(sectionId, page) {
     var results = [];
 
     // Même logique que search
-    var articlePattern = /<article[^>]*class=["'][^"']*(?:post|entry)[^"']*["'][^>]*>([\s\S]*?)<\/article>/gi;
+    var articleRegex = /<article[^>]*>([\s\S]*?)<\/article>/gi;
     var articles = [];
     var match;
     
-    while ((match = articlePattern.exec(html)) !== null) {
+    while ((match = articleRegex.exec(html)) !== null) {
       articles.push(match[1]);
     }
 
-    for (var i = 0; i < articles.length; i++) {
+    for (var i = 0; i < articles.length && i < 15; i++) {
       var article = articles[i];
       
-      var titleMatch = article.match(/<h[23][^>]*>[\s\S]*?<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h[23]>/i) ||
-                       article.match(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
-      
+      var titleMatch = article.match(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
       if (!titleMatch) continue;
       
       var bookUrl = this._cleanUrl(titleMatch[1]);
-      var title = this._extractText(titleMatch[2] || titleMatch[0], ">", "<") || "Sans titre";
+      var title = this._cleanText(titleMatch[2]);
       
-      var coverMatch = article.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i);
-      var cover = coverMatch ? this._cleanUrl(coverMatch[1]) : undefined;
+      if (!title || title.length < 2) continue;
+      if (bookUrl.includes("/page/") || bookUrl.includes("/category/")) continue;
       
-      var authorMatch = article.match(/class=["'][^"']*author[^"']*["'][^>]*>([^<]+)/i);
-      var author = authorMatch ? authorMatch[1].trim() : undefined;
-
+      var imgMatch = article.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i);
+      var cover = imgMatch ? this._cleanUrl(imgMatch[1]) : undefined;
+      
       var idMatch = bookUrl.match(/\/([^\/]+)\/?$/);
-      var bookId = idMatch ? idMatch[1] : bookUrl;
+      var bookId = idMatch ? idMatch[1] : String(i);
 
       results.push({
-        id: "lectuepub:" + bookId,
+        id: "lp6:" + bookId,
         title: title,
-        author: author,
         cover: cover,
         source: this.name,
         extra: { bookUrl: bookUrl, bookId: bookId },
       });
     }
 
+    cinder.log("[lectuepub] Découverte: " + results.length + " résultats");
     return results;
 
   } catch (e) {
-    cinder.error("[lectuepub] erreur découverte: " + e.message);
+    cinder.error("[lectuepub] ERREUR découverte: " + e.message);
     return [];
   }
 };
 
-// ─── Résolution du lien de téléchargement ────────────────────────────────────
+// ─── Résolution du lien ─────────────────────────────────────────────────────
 
 LectuepubLibre6.resolve = async function(item) {
   var e = (item && item.extra) || {};
-  if (!e.bookUrl) throw new Error("URL du livre manquante");
+  if (!e.bookUrl) {
+    throw new Error("URL du livre manquante");
+  }
 
-  cinder.log("[lectuepub] résolution: " + e.bookUrl);
+  cinder.log("[lectuepub] Résolution: " + e.bookUrl);
 
   try {
     var r = await cinder.fetch(e.bookUrl, {
@@ -274,66 +293,79 @@ LectuepubLibre6.resolve = async function(item) {
     });
 
     if (!r || !r.data) {
-      throw new Error("Impossible de charger la page du livre");
+      throw new Error("Page du livre inaccessible");
     }
 
     var html = String(r.data);
+    cinder.log("[lectuepub] Page reçue: " + html.length + " caractères");
 
-    // Chercher les liens de téléchargement EPUB
     var downloadUrl = null;
     var fileFormat = "epub";
 
-    // Pattern pour les liens directs .epub ou .pdf
-    var epubMatch = html.match(/href=["']([^"']+\.epub[^"']*)["']/i) ||
-                    html.match(/href=["']([^"']+)["'][^>]*>[^<]*EPUB/i);
-    var pdfMatch = html.match(/href=["']([^"']+\.pdf[^"']*)["']/i) ||
-                   html.match(/href=["']([^"']+)["'][^>]*>[^<]*PDF/i);
+    // Pattern 1: Liens directs .epub
+    var epubPatterns = [
+      /href=["']([^"']+\.epub[^"']*)["']/i,
+      /href=["']([^"']+)["'][^>]*>[^<]*EPUB/i,
+      /href=["']([^"']+)["'][^>]*class=["'][^"']*download[^"']*["'][^>]*>[^<]*EPUB/i,
+    ];
 
-    if (epubMatch) {
-      downloadUrl = this._cleanUrl(epubMatch[1]);
-      fileFormat = "epub";
-    } else if (pdfMatch) {
-      downloadUrl = this._cleanUrl(pdfMatch[1]);
-      fileFormat = "pdf";
+    for (var i = 0; i < epubPatterns.length; i++) {
+      var m = html.match(epubPatterns[i]);
+      if (m) {
+        downloadUrl = this._cleanUrl(m[1]);
+        fileFormat = "epub";
+        break;
+      }
     }
 
-    // Si pas trouvé, chercher des boutons de téléchargement
+    // Pattern 2: Liens PDF si pas d'EPUB
     if (!downloadUrl) {
-      var btnMatch = html.match(/<a[^>]+class=["'][^"']*(?:download|btn|button)[^"']*["'][^>]+href=["']([^"']+)["']/i) ||
-                     html.match(/<a[^>]+href=["']([^"']+)["'][^>]*class=["'][^"']*(?:download|btn|button)/i);
+      var pdfPatterns = [
+        /href=["']([^"']+\.pdf[^"']*)["']/i,
+        /href=["']([^"']+)["'][^>]*>[^<]*PDF/i,
+      ];
+      
+      for (var j = 0; j < pdfPatterns.length; j++) {
+        var m = html.match(pdfPatterns[j]);
+        if (m) {
+          downloadUrl = this._cleanUrl(m[1]);
+          fileFormat = "pdf";
+          break;
+        }
+      }
+    }
+
+    // Pattern 3: Boutons de téléchargement généraux
+    if (!downloadUrl) {
+      var btnMatch = html.match(/<a[^>]+href=["']([^"']+(?:download|descargar)[^"']*)["']/i) ||
+                     html.match(/<a[^>]+class=["'][^"']*(?:btn|button)[^"']*["'][^>]+href=["']([^"']+)["']/i);
       if (btnMatch) {
         downloadUrl = this._cleanUrl(btnMatch[1]);
       }
     }
 
-    // Chercher dans des iframes ou embeds
     if (!downloadUrl) {
-      var iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
-      if (iframeMatch) {
-        downloadUrl = this._cleanUrl(iframeMatch[1]);
-      }
+      cinder.error("[lectuepub] Aucun lien trouvé dans la page");
+      throw new Error("Lien de téléchargement non trouvé");
     }
 
-    if (!downloadUrl) {
-      throw new Error("Lien de téléchargement non trouvé sur la page");
-    }
-
-    // Déterminer le format depuis l'URL
+    // Déterminer le format
     if (downloadUrl.toLowerCase().includes(".pdf")) fileFormat = "pdf";
     else if (downloadUrl.toLowerCase().includes(".epub")) fileFormat = "epub";
 
-    var nom = String(item.title || "libro").replace(/[\\/:*?"<>|]+/g, " ").trim();
+    var nom = String(item.title || "libro")
+      .replace(/[\\/:*?"<>|]+/g, " ")
+      .trim();
 
-    cinder.log("[lectuepub] lien trouvé: " + downloadUrl + " (" + fileFormat + ")");
+    cinder.log("[lectuepub] Lien trouvé: " + downloadUrl + " (" + fileFormat + ")");
 
     return {
       url: downloadUrl,
       fileName: nom + "." + fileFormat,
-      // Pas d'en-têtes spéciaux nécessaires pour ce site
     };
 
   } catch (e) {
-    cinder.error("[lectuepub] erreur résolution: " + e.message);
+    cinder.error("[lectuepub] ERREUR résolution: " + e.message);
     throw new Error("Impossible d'obtenir le lien: " + e.message);
   }
 };
