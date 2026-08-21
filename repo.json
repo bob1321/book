@@ -10,7 +10,7 @@
       "author": "bob1321",
       "icon": "book-outline",
       "contentType": "books",
-      "scriptUrl": "REMPLACER-PAR-URL-PUBLIQUE/zlibrary.js",
+      "scriptUrl": "https://raw.githubusercontent.com/bob1321/book/refs/heads/main/zlibrary.js",
       "minCinderVersion": "1.0.0"
     }
   ]
