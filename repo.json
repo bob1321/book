@@ -16,19 +16,14 @@
   ]
 }
 {
-  "name": "lectuepublibre6",
-  "author": "bob1321",
-  "extensions": [
-    {
-      "id": "lectuepublibre6",
-      "name": "lectuepublibre6",
-      "version": "1.1.1",
-      "description": "Recherche, decouverte et telechargement depuis votre compte lectuepublibre6.",
-      "author": "bob1321",
-      "icon": "book-outline",
-      "contentType": "books",
-      "scriptUrl": "https://raw.githubusercontent.com/bob1321/book/refs/heads/main/lectuepublibre6.js",
-      "minCinderVersion": "1.0.0"
-    }
-  ]
+  "id": "lectuepublibre6-catalogue",
+  "name": "LectuePublibre6 Catalogue",
+  "version": "1.0.0",
+  "icon": "📚",
+  "description": "Recherche et consultation du catalogue LectuePublibre6, sans extraction des liens de téléchargement.",
+  "contentType": "books",
+  "contentTypes": [
+    "ebook"
+  ],
+  "scriptUrl": "https://raw.githubusercontent.com/bob1321/book/main/lectuepublibre6.js"
 }
