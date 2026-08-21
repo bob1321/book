@@ -14,15 +14,18 @@
       "minCinderVersion": "1.0.0"
     },
     {
-      "id": "lectuepublibre6-catalogue",
+      "id": "lectuepublibre6",
       "name": "LectuePublibre6",
       "version": "1.0.0",
-      "description": "Recherche et consultation du catalogue LectuePublibre6.",
+      "description": "Recherche dans le catalogue LectuePublibre6.",
       "author": "bob1321",
       "icon": "book-outline",
       "contentType": "books",
       "scriptUrl": "https://raw.githubusercontent.com/bob1321/book/refs/heads/main/lectuepublibre6.js",
-      "minCinderVersion": "1.0.0"
+      "minCinderVersion": "2.0.0",
+      "contentTypes": [
+        "ebook"
+      ]
     }
   ]
 }
