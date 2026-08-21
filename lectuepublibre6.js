@@ -330,8 +330,8 @@ __cinderExport = {
   capabilities: {
     search: true,
     discover: true,
-    download: false,
-    resolve: false,
+    download: true,
+    resolve: true,
     searchDownloads: false,
     manga: false,
   },
