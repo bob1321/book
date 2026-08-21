@@ -196,3 +196,4 @@ const Source = {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = Source;
 }
+__cinderExport = lectuepublibre6;
