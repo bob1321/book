@@ -1,0 +1,17 @@
+{
+  "name": "Z-Library pour Cinder",
+  "author": "REMPLACER-PAR-VOTRE-PSEUDO",
+  "extensions": [
+    {
+      "id": "zlibrary",
+      "name": "Z-Library",
+      "version": "1.1.1",
+      "description": "Recherche, decouverte et telechargement depuis votre compte Z-Library.",
+      "author": "REMPLACER-PAR-VOTRE-PSEUDO",
+      "icon": "book-outline",
+      "contentType": "books",
+      "scriptUrl": "REMPLACER-PAR-URL-PUBLIQUE/zlibrary.js",
+      "minCinderVersion": "1.0.0"
+    }
+  ]
+}
