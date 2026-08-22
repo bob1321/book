@@ -1,9 +1,9 @@
-// LectuepubLibre6 — Debug version avec fetchBrowser
+// LectuepubLibre6 — Version API WordPress REST
 
 __cinderExport = {
 	id: "lectuepub6",
 	name: "Lectuepub Libre",
-	version: "1.0.9",
+	version: "2.0.0",
 	icon: "📚",
 	description: "Descargar libros EPUB y PDF gratis en español",
 	contentType: "books",
@@ -19,176 +19,115 @@ __cinderExport = {
 	},
 
 	_BASE_URL: "https://lectuepublibre6.com",
+	_API_URL: "https://lectuepublibre6.com/wp-json/wp/v2",
 
-	_absUrl: function(url) {
-		if (!url) return "";
-		if (url.indexOf("//") === 0) return "https:" + url;
-		if (url.indexOf("http") === 0) return url;
-		if (url.charAt(0) === "/") return this._BASE_URL + url;
-		return this._BASE_URL + "/" + url;
-	},
-
-	_clean: function(value) {
-		if (typeof cinder !== "undefined" && cinder.normalizeText) {
-			return cinder.normalizeText(String(value || ""));
-		}
-		return String(value || "")
+	_clean: function(text) {
+		if (!text) return "";
+		return String(text)
 			.replace(/<[^>]+>/g, "")
+			.replace(/&nbsp;/g, " ")
+			.replace(/&amp;/g, "&")
 			.replace(/\s+/g, " ")
 			.trim();
 	},
 
-	// Essayer fetch normal d'abord, puis fetchBrowser si échec
-	_fetchWithFallback: async function(url) {
-		cinder.log("[LectuepubLibre6] Fetching: " + url);
-		
-		// Essayer fetch normal
+	// Appel API WordPress
+	_apiCall: async function(endpoint) {
 		try {
-			var resp = await cinder.fetch(url, {
+			var resp = await cinder.fetch(this._API_URL + endpoint, {
 				headers: {
-					"Accept": "text/html,*/*",
-					"Accept-Language": "es-ES,es;q=0.9",
-					"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+					"Accept": "application/json",
+					"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
 				},
 				timeout: 30000,
 			});
-			if (resp && resp.status === 200 && resp.data && resp.data.length > 1000) {
-				cinder.log("[LectuepubLibre6] Fetch normal OK, length: " + resp.data.length);
-				return resp;
+			if (resp && resp.data) {
+				return JSON.parse(resp.data);
 			}
 		} catch (e) {
-			cinder.log("[LectuepubLibre6] Fetch normal failed: " + e);
+			cinder.log("[LectuepubLibre6] API error: " + e);
 		}
-
-		// Fallback sur fetchBrowser
-		cinder.log("[LectuepubLibre6] Trying fetchBrowser...");
-		try {
-			var browserResp = await cinder.fetchBrowser(url, {
-				timeout: 60000,
-			});
-			cinder.log("[LectuepubLibre6] fetchBrowser OK, length: " + (browserResp.data ? browserResp.data.length : 0));
-			return browserResp;
-		} catch (e) {
-			cinder.log("[LectuepubLibre6] fetchBrowser failed: " + e);
-		}
-		
 		return null;
 	},
 
 	search: async function(query, page) {
-		var q = String(query || "").trim();
-		if (!q) return [];
+		page = page || 1;
+		var endpoint = "/posts?search=" + encodeURIComponent(query) + "&per_page=20&page=" + page + "&_embed";
 		
-		page = page || 0;
-		var url = page > 0
-			? this._BASE_URL + "/page/" + (page + 1) + "/?s=" + encodeURIComponent(q)
-			: this._BASE_URL + "/?s=" + encodeURIComponent(q);
-		
-		cinder.log("[LectuepubLibre6] Search URL: " + url);
-		
-		var resp = await this._fetchWithFallback(url);
-		if (!resp || !resp.data) {
-			cinder.log("[LectuepubLibre6] No response data");
-			return [];
-		}
+		var data = await this._apiCall(endpoint);
+		if (!data || !Array.isArray(data)) return [];
 
-		var html = resp.data;
-		cinder.log("[LectuepubLibre6] HTML length: " + html.length);
-		
-		// Chercher un extrait pour debug
-		var excerpt = html.substring(html.indexOf("<article"), html.indexOf("<article") + 500);
-		cinder.log("[LectuepubLibre6] Article excerpt: " + excerpt);
-
-		var results = [];
-		
-		// Méthode 1: Utiliser cinder.parseHTML
-		try {
-			var doc = cinder.parseHTML(html);
-			var articles = doc.querySelectorAll("article");
-			cinder.log("[LectuepubLibre6] Found " + articles.length + " articles with querySelectorAll");
+		return data.map(function(post) {
+			var title = post.title && post.title.rendered ? this._clean(post.title.rendered) : "Sin título";
+			var url = post.link || "";
 			
-			for (var i = 0; i < articles.length; i++) {
-				var article = articles[i];
-				
-				// Chercher le lien principal
-				var link = article.querySelector("a[rel='bookmark']") || 
-				           article.querySelector("h2 a") ||
-				           article.querySelector(".entry-title a") ||
-				           article.querySelector("a");
-				
-				if (!link) continue;
-				
-				var bookUrl = this._absUrl(link.attr("href") || "");
-				var title = this._clean(link.text());
-				
-				if (!bookUrl || !title) continue;
-				if (bookUrl.indexOf("/page/") > -1) continue;
-				if (bookUrl.indexOf("/category/") > -1) continue;
-				
-				// Image
-				var img = article.querySelector("img");
-				var cover = img ? this._absUrl(img.attr("src") || img.attr("data-src") || "") : "";
-				
-				// Auteur
-				var authorEl = article.querySelector(".meta-author a") || article.querySelector(".author");
-				var author = authorEl ? this._clean(authorEl.text()) : "Desconocido";
-				
-				results.push({
-					id: "lp6_" + i,
-					title: title,
-					author: author,
-					cover: cover || undefined,
-					url: bookUrl,
-					source: "Lectuepub Libre",
-					extra: { bookUrl: bookUrl }
-				});
+			// Extraire image
+			var cover = "";
+			if (post._embedded && post._embedded["wp:featuredmedia"] && post._embedded["wp:featuredmedia"][0]) {
+				var media = post._embedded["wp:featuredmedia"][0];
+				cover = media.source_url || "";
 			}
-		} catch (e) {
-			cinder.log("[LectuepubLibre6] parseHTML error: " + e);
-		}
-		
-		// Méthode 2: Si échec, utiliser regex simple
-		if (results.length === 0) {
-			cinder.log("[LectuepubLibre6] Trying regex method...");
-			var regex = /href=["'](https?:\/\/lectuepublibre6\.com\/[^"']+)["'][^>]*>[\s\S]*?<h2[^>]*>([^<]+)</gi;
-			var match;
-			var seen = {};
-			while ((match = regex.exec(html)) !== null) {
-				var url = match[1];
-				var title = this._clean(match[2]);
-				
-				if (seen[url]) continue;
-				if (url.includes("/page/") || url.includes("/category/")) continue;
-				if (title.length < 3) continue;
-				
-				seen[url] = true;
-				results.push({
-					id: "lp6_" + results.length,
-					title: title,
-					author: "Desconocido",
-					url: url,
-					source: "Lectuepub Libre",
-					extra: { bookUrl: url }
-				});
+			
+			// Extraire auteur
+			var author = "Desconocido";
+			if (post._embedded && post._embedded.author && post._embedded.author[0]) {
+				author = post._embedded.author[0].name || "Desconocido";
 			}
-		}
 
-		cinder.log("[LectuepubLibre6] Found " + results.length + " results");
-		return results;
+			return {
+				id: "lp6_" + post.id,
+				title: title,
+				author: author,
+				cover: cover || undefined,
+				url: url,
+				source: "Lectuepub Libre",
+				extra: {
+					bookUrl: url,
+					bookId: String(post.id),
+					slug: post.slug || ""
+				}
+			};
+		}.bind(this));
 	},
 
 	getDiscoverSections: async function() {
-		return [{ id: "latest", title: "Últimos", icon: "⏰" }];
+		return [
+			{ id: "latest", title: "Últimos libros", icon: "⏰" },
+			{ id: "page2", title: "Página 2", icon: "📄" }
+		];
 	},
 
 	getDiscoverItems: async function(sectionId, page) {
-		page = page || 0;
-		var url = this._BASE_URL + "/page/" + (page + 1) + "/";
-		var resp = await this._fetchWithFallback(url);
-		if (!resp || !resp.data) return [];
+		page = page || 1;
+		var endpoint = "/posts?per_page=20&page=" + page + "&_embed";
 		
-		// Réutiliser la logique de search
-		return this.search("", 0);
+		var data = await this._apiCall(endpoint);
+		if (!data || !Array.isArray(data)) return [];
+
+		return data.map(function(post) {
+			var title = post.title && post.title.rendered ? this._clean(post.title.rendered) : "Sin título";
+			var cover = "";
+			if (post._embedded && post._embedded["wp:featuredmedia"] && post._embedded["wp:featuredmedia"][0]) {
+				cover = post._embedded["wp:featuredmedia"][0].source_url || "";
+			}
+			var author = "Desconocido";
+			if (post._embedded && post._embedded.author && post._embedded.author[0]) {
+				author = post._embedded.author[0].name || "Desconocido";
+			}
+
+			return {
+				id: "lp6_" + post.id,
+				title: title,
+				author: author,
+				cover: cover || undefined,
+				url: post.link,
+				source: "Lectuepub Libre",
+				extra: {
+					bookUrl: post.link,
+					bookId: String(post.id)
+				}
+			};
+		}.bind(this));
 	},
 
 	resolve: async function(item) {
@@ -196,35 +135,40 @@ __cinderExport = {
 			throw new Error("URL manquante");
 		}
 
-		var resp = await this._fetchWithFallback(item.extra.bookUrl);
-		if (!resp || !resp.data) {
-			throw new Error("Page inaccessible");
+		// Récupérer le contenu du post
+		var slug = item.extra.slug || item.extra.bookUrl.split("/").filter(Boolean).pop();
+		var endpoint = "/posts?slug=" + encodeURIComponent(slug) + "&_embed";
+		var data = await this._apiCall(endpoint);
+		
+		if (!data || !data[0] || !data[0].content || !data[0].content.rendered) {
+			throw new Error("Contenu non trouvé");
 		}
 
-		var html = resp.data;
+		var content = data[0].content.rendered;
 		var downloadUrl = null;
 		var fileFormat = "epub";
 
+		// Chercher les liens dans le contenu
 		var patterns = [
-			/send\.now\/[^"'\s]+/i,
-			/upload\.ee\/[^"'\s]+/i,
-			/krakenfiles\.com\/[^"'\s]+/i,
-			/ey43\.com\/[^"'\s]+/i,
-			/\.epub[^"'\s]*/i,
-			/\.pdf[^"'\s]*/i,
+			/href=["'](https?:\/\/send\.now\/[^"']+)["']/i,
+			/href=["'](https?:\/\/www\.upload\.ee\/[^"']+)["']/i,
+			/href=["'](https?:\/\/krakenfiles\.com\/[^"']+)["']/i,
+			/href=["'](https?:\/\/ey43\.com\/[^"']+)["']/i,
+			/href=["']([^"']+\.epub[^"']*)["']/i,
+			/href=["']([^"']+\.pdf[^"']*)["']/i,
 		];
 
 		for (var i = 0; i < patterns.length; i++) {
-			var match = html.match(patterns[i]);
+			var match = content.match(patterns[i]);
 			if (match) {
-				downloadUrl = match[0].startsWith("http") ? match[0] : "https://" + match[0];
-				if (match[0].toLowerCase().includes(".pdf")) fileFormat = "pdf";
+				downloadUrl = match[1].startsWith("http") ? match[1] : "https://" + match[1];
+				if (match[1].toLowerCase().includes(".pdf")) fileFormat = "pdf";
 				break;
 			}
 		}
 
 		if (!downloadUrl) {
-			throw new Error("Lien non trouvé");
+			throw new Error("Lien de téléchargement non trouvé");
 		}
 
 		return {
