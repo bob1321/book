@@ -1,11 +1,11 @@
 // LectuepubLibre6 — Source pour Cinder
-// Version corrigée avec parsing HTML adapté au site
+// Version corrigée avec parsing HTML adapté à la structure réelle du site
 
 var LectuepubLibre6 = {};
 
 LectuepubLibre6.id = "lectuepub6";
 LectuepubLibre6.name = "Lectuepub Libre";
-LectuepubLibre6.version = "1.0.4";
+LectuepubLibre6.version = "1.0.5";
 LectuepubLibre6.icon = "book-outline";
 LectuepubLibre6.description = "Descargar libros EPUB y PDF gratis en español.";
 
@@ -55,58 +55,68 @@ LectuepubLibre6._extractBooks = function(html) {
   var results = [];
   var seenUrls = {};
   
-  // Pattern 1: Structure du site - liens d'images vers les livres
-  // Format: [![](image-url)](book-url)
-  var imgLinkPattern = /\[!\[\]\(([^)]+)\)\]\(([^)]+)\)/g;
+  // Pattern principal: balises <article> avec classe "post"
+  var articleRegex = /<article[^>]*class=["'][^"']*post[^"']*["'][^>]*>([\s\S]*?)<\/article>/gi;
   var match;
   
-  while ((match = imgLinkPattern.exec(html)) !== null) {
-    var coverUrl = match[1];
-    var bookUrl = match[2];
+  while ((match = articleRegex.exec(html)) !== null) {
+    var article = match[1];
+    
+    // Chercher le lien de l'image (wp-post-image-link)
+    var imgLinkMatch = article.match(/<a[^>]+class=["'][^"']*wp-post-image-link[^"']*["'][^>]+href=["']([^"']+)["']/i);
+    if (!imgLinkMatch) continue;
+    
+    var bookUrl = this._cleanUrl(imgLinkMatch[1]);
     
     // Filtrer les liens qui ne sont pas des livres
     if (!bookUrl || 
         bookUrl.includes("/page/") || 
         bookUrl.includes("/category/") || 
         bookUrl.includes("/tag/") ||
-        bookUrl.includes("/author/") ||
-        bookUrl.includes("wp-content/uploads")) {
+        bookUrl.includes("/author/")) {
       continue;
     }
-    
-    // Nettoyer les URLs
-    coverUrl = this._cleanUrl(coverUrl);
-    bookUrl = this._cleanUrl(bookUrl);
     
     // Éviter les doublons
     if (seenUrls[bookUrl]) continue;
     seenUrls[bookUrl] = true;
     
-    // Extraire l'ID du livre depuis l'URL
-    var idMatch = bookUrl.match(/\/([^\/]+)\/?$/);
-    var bookId = idMatch ? idMatch[1] : String(Math.random()).slice(2, 10);
+    // Chercher l'image
+    var imgMatch = article.match(/<img[^>]+src=["']([^"']+)["'][^>]*class=["'][^"']*wp-post-image[^"']*["']/i) ||
+                   article.match(/<img[^>]+class=["'][^"']*wp-post-image[^"']*["'][^>]*src=["']([^"']+)["']/i) ||
+                   article.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i);
+    var cover = imgMatch ? this._cleanUrl(imgMatch[1]) : undefined;
     
-    // Extraire le titre depuis l'URL (slug)
-    var title = bookId
-      .replace(/-/g, " ")
-      .replace(/\.html?$/, "")
-      .replace(/\b\w/g, function(l) { return l.toUpperCase(); });
-    
-    // Chercher le texte après l'image pour trouver une meilleure description
-    var afterImage = html.substring(match.index + match[0].length, match.index + match[0].length + 500);
-    var descMatch = afterImage.match(/([^\[]+)(?=\[|$)/);
-    if (descMatch) {
-      var desc = this._cleanText(descMatch[1]);
-      if (desc && desc.length > 10 && desc.length < 300) {
-        // Essayer d'extraire le titre depuis la description si possible
+    // Chercher le titre dans h2.entry-title
+    var titleMatch = article.match(/<h2[^>]+class=["'][^"']*entry-title[^"']*["'][^>]*>[\s\S]*?<a[^>]+href=["'][^"']+["'][^>]*>([\s\S]*?)<\/a>/i);
+    var title = "Sin título";
+    if (titleMatch) {
+      title = this._cleanText(titleMatch[1]);
+    } else {
+      // Extraire le titre depuis l'URL
+      var urlMatch = bookUrl.match(/\/([^\/]+)\/?$/);
+      if (urlMatch) {
+        title = urlMatch[1]
+          .replace(/-/g, " ")
+          .replace(/\.html?$/, "")
+          .replace(/\b\w/g, function(l) { return l.toUpperCase(); });
       }
     }
     
+    // Chercher l'auteur dans meta-author
+    var authorMatch = article.match(/<span[^>]+class=["'][^"']*meta-author[^"']*["'][^>]*>[\s\S]*?<a[^>]+>([^<]+)<\/a>/i) ||
+                     article.match(/class=["'][^"']*fn[^"']*["'][^>]*>([^<]+)<\/a>/i);
+    var author = authorMatch ? this._cleanText(authorMatch[1]) : "Desconocido";
+    
+    // Extraire l'ID depuis l'URL
+    var idMatch = bookUrl.match(/\/([^\/]+)\/?$/);
+    var bookId = idMatch ? idMatch[1] : String(Math.random()).slice(2, 10);
+
     results.push({
       id: "lp6_" + bookId,
       title: title,
-      author: "Desconocido",
-      cover: coverUrl,
+      author: author,
+      cover: cover,
       source: this.name,
       extra: {
         bookUrl: bookUrl,
@@ -115,73 +125,32 @@ LectuepubLibre6._extractBooks = function(html) {
     });
   }
   
-  // Pattern 2: Liens "Seguir leyendo" avec leurs images précédentes
+  // Si aucun article trouvé, essayer un pattern alternatif avec les divs post-column
   if (results.length === 0) {
-    var seguirPattern = /\[!\[\]\(([^)]+)\)\]\(([^)]+)\)[\s\S]*?\[Seguir leyendo\]\(([^)]+)\)/gi;
-    while ((match = seguirPattern.exec(html)) !== null) {
-      var coverUrl = match[1];
-      var imgLink = match[2];
-      var bookUrl = match[3];
+    var columnRegex = /<div[^>]+class=["'][^"']*post-column[^"']*["'][^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
+    while ((match = columnRegex.exec(html)) !== null) {
+      var column = match[1];
+      
+      // Chercher le lien et l'image
+      var linkMatch = column.match(/<a[^>]+href=["']([^"']+)["'][^>]*class=["'][^"']*wp-post-image-link/i) ||
+                     column.match(/<a[^>]+href=["']([^"']+)["'][^>]*>[\s\S]*?<img/i);
+      if (!linkMatch) continue;
+      
+      var bookUrl = this._cleanUrl(linkMatch[1]);
       
       if (!bookUrl || bookUrl.includes("/page/") || bookUrl.includes("/category/")) continue;
-      
-      coverUrl = this._cleanUrl(coverUrl);
-      bookUrl = this._cleanUrl(bookUrl);
-      
       if (seenUrls[bookUrl]) continue;
       seenUrls[bookUrl] = true;
       
-      var idMatch = bookUrl.match(/\/([^\/]+)\/?$/);
-      var bookId = idMatch ? idMatch[1] : String(results.length);
-      
-      var title = bookId.replace(/-/g, " ").replace(/\b\w/g, function(l) { return l.toUpperCase(); });
-      
-      results.push({
-        id: "lp6_" + bookId,
-        title: title,
-        author: "Desconocido",
-        cover: coverUrl,
-        source: this.name,
-        extra: {
-          bookUrl: bookUrl,
-          bookId: bookId
-        }
-      });
-    }
-  }
-  
-  // Pattern 3: Recherche générique de liens vers des pages de livres
-  if (results.length === 0) {
-    // Chercher des liens qui ressemblent à des livres (pas des catégories, tags, etc.)
-    var linkPattern = /href=["'](https?:\/\/lectuepublibre6\.com\/[^"']+)["']/gi;
-    while ((match = linkPattern.exec(html)) !== null) {
-      var url = match[1];
-      
-      // Filtrer les URLs non-livres
-      if (url.includes("/page/") || 
-          url.includes("/category/") || 
-          url.includes("/tag/") ||
-          url.includes("/author/") ||
-          url.includes("wp-content") ||
-          url.includes("#") ||
-          seenUrls[url]) {
-        continue;
-      }
-      
-      // Vérifier que ça ressemble à un livre (URL avec des mots séparés par des tirets)
-      var pathMatch = url.match(/\/([^\/\-]+-[^\/]+)\/?$/);
-      if (!pathMatch) continue;
-      
-      seenUrls[url] = true;
-      
-      var bookId = pathMatch[1];
-      var title = bookId.replace(/-/g, " ").replace(/\b\w/g, function(l) { return l.toUpperCase(); });
-      
-      // Chercher une image associée dans le HTML proche
-      var beforeLink = html.substring(Math.max(0, match.index - 500), match.index);
-      var imgMatch = beforeLink.match(/src=["']([^"']+\.(?:jpg|jpeg|png|webp))["']/i);
+      var imgMatch = column.match(/<img[^>]+src=["']([^"']+)["']/i);
       var cover = imgMatch ? this._cleanUrl(imgMatch[1]) : undefined;
       
+      var titleMatch = column.match(/<h2[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i);
+      var title = titleMatch ? this._cleanText(titleMatch[1]) : "Sin título";
+      
+      var idMatch = bookUrl.match(/\/([^\/]+)\/?$/);
+      var bookId = idMatch ? idMatch[1] : String(results.length);
+
       results.push({
         id: "lp6_" + bookId,
         title: title,
@@ -189,7 +158,7 @@ LectuepubLibre6._extractBooks = function(html) {
         cover: cover,
         source: this.name,
         extra: {
-          bookUrl: url,
+          bookUrl: bookUrl,
           bookId: bookId
         }
       });
@@ -207,7 +176,7 @@ LectuepubLibre6.search = async function(query, page) {
 
   var p = page && page > 1 ? page : 1;
   
-  // L'URL de recherche WordPress standard
+  // URL de recherche WordPress standard
   var searchUrl = this.baseUrl + "/?s=" + encodeURIComponent(q);
   if (p > 1) {
     searchUrl += "&paged=" + p;
@@ -220,9 +189,6 @@ LectuepubLibre6.search = async function(query, page) {
         "User-Agent": this.UA,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1"
       },
       timeout: 30000,
     });
